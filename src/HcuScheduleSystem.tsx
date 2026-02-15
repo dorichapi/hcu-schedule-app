@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Calendar, Settings, Moon, Sun, Clock, RefreshCw, AlertCircle, CheckCircle, Plus, Trash2, LogOut, Lock, Download, Upload, Edit2, Save, X, Eye, Users, FileSpreadsheet, Activity, Maximize2, Minimize2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { supabase } from './lib/supabase';
@@ -166,10 +166,14 @@ const HcuScheduleSystem = () => {
   
   // 勤務表データ
   const [schedule, setSchedule] = useState<any>(null);
+  // 手動「夜」設定時に翌日・翌々日の元値を保存（セッション中のみ有効）
+  const nightBackupRef = useRef<Record<string, string | null>>({});
   
   // UI状態
   const [showSettings, setShowSettings] = useState(false);
   const [showRequestReview, setShowRequestReview] = useState(false);
+  // 希望未提出者一覧
+  const [showUnsubmitted, setShowUnsubmitted] = useState(false);
   // 管理者編集前のオリジナルリクエストを追跡
   const [originalRequests, setOriginalRequests] = useState<Record<string, any>>({});
   const [showExcelImport, setShowExcelImport] = useState(false);
@@ -2554,6 +2558,16 @@ const HcuScheduleSystem = () => {
                 希望確認
               </button>
               <button
+                onClick={async () => {
+                  await reloadRequestsFromDB();
+                  setShowUnsubmitted(true);
+                }}
+                className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-700 rounded-xl flex items-center gap-2 transition-colors border border-red-200"
+              >
+                <AlertCircle size={18} />
+                未提出者
+              </button>
+              <button
                 onClick={() => setShowPrevMonthImport(true)}
                 className={`px-4 py-2 rounded-xl flex items-center gap-2 transition-colors ${
                   previousMonthData ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 hover:bg-gray-200'
@@ -2841,41 +2855,58 @@ const HcuScheduleSystem = () => {
           }
 
           // セル編集ハンドラ（schedule未生成時は自動作成）
-          // 方式: 「夜」設定時→翌日「明」翌々日「休」を自動セット
-          //       「夜」解除時→翌日が「明」なら空に、翌々日が「休」なら空に自動クリア
-          //       バックアップ不要（DB読み込み後も常に正しく動作）
+          // 方式:
+          //   「夜」を手動設定 → 翌日・翌々日の元値をバックアップ → 「明」「休」で上書き
+          //   「夜」を解除 →
+          //     バックアップあり（手動設定した夜）→ 元の値に復元
+          //     バックアップなし（自動生成/DB由来の夜）→ 翌日・翌々日はそのまま変更しない
           const handleCellClick = (nurseId: any, dayIndex: number, currentShift: string | null) => {
             const CYCLE = ['日', '夜', '休', '有', null];
             const currentIdx = currentShift ? CYCLE.indexOf(currentShift) : -1;
             const nextIdx = (currentShift === '明') ? CYCLE.indexOf('休') : (currentIdx >= 0 ? (currentIdx + 1) % CYCLE.length : 0);
             const newShift = CYCLE[nextIdx];
+            const bk = nightBackupRef.current;
 
             const updateData = (data: any) => {
               const newData = JSON.parse(JSON.stringify(data));
               if (!newData[nurseId]) newData[nurseId] = new Array(daysInMonth).fill(null);
               
-              // ① 「夜」から別のシフトに変更 → 翌日「明」・翌々日「休」を自動クリア
+              // ① 「夜」から別のシフトに変更 → バックアップがあれば復元
               if (currentShift === '夜' && newShift !== '夜') {
-                if (dayIndex + 1 < daysInMonth && newData[nurseId][dayIndex + 1] === '明') {
-                  newData[nurseId][dayIndex + 1] = null;
-                  updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 2, null);
+                const key1 = `${nurseId}-${dayIndex + 1}`;
+                const key2 = `${nurseId}-${dayIndex + 2}`;
+                // バックアップが存在する場合のみ復元（手動で夜にした場合）
+                if (key1 in bk) {
+                  if (dayIndex + 1 < daysInMonth) {
+                    newData[nurseId][dayIndex + 1] = bk[key1];
+                    updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 2, bk[key1]);
+                  }
+                  delete bk[key1];
                 }
-                if (dayIndex + 2 < daysInMonth && newData[nurseId][dayIndex + 2] === '休') {
-                  newData[nurseId][dayIndex + 2] = null;
-                  updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 3, null);
+                if (key2 in bk) {
+                  if (dayIndex + 2 < daysInMonth) {
+                    newData[nurseId][dayIndex + 2] = bk[key2];
+                    updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 3, bk[key2]);
+                  }
+                  delete bk[key2];
                 }
+                // バックアップがない場合（自動生成/DB由来）→ 翌日・翌々日はそのまま
               }
               
               // ② クリックしたセルの値を更新
               newData[nurseId][dayIndex] = newShift;
               
-              // ③ 新しいシフトが「夜」→ 翌日「明」・翌々日「休」を自動セット
+              // ③ 新しいシフトが「夜」→ 翌日・翌々日をバックアップしてから上書き
               if (newShift === '夜') {
                 if (dayIndex + 1 < daysInMonth) {
+                  const key1 = `${nurseId}-${dayIndex + 1}`;
+                  bk[key1] = newData[nurseId][dayIndex + 1]; // 現在の値を保存
                   newData[nurseId][dayIndex + 1] = '明';
                   updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 2, '明');
                 }
                 if (dayIndex + 2 < daysInMonth) {
+                  const key2 = `${nurseId}-${dayIndex + 2}`;
+                  bk[key2] = newData[nurseId][dayIndex + 2]; // 現在の値を保存
                   newData[nurseId][dayIndex + 2] = '休';
                   updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 3, '休');
                 }
@@ -3462,6 +3493,160 @@ const HcuScheduleSystem = () => {
           </div>
         )}
 
+
+        {/* 希望未提出者モーダル */}
+        {showUnsubmitted && (() => {
+          const mk = `${targetYear}-${targetMonth}`;
+          const monthReqs = requests[mk] || {};
+          const submitted = activeNurses.filter(n => {
+            const nurseReqs = monthReqs[String(n.id)] || {};
+            return Object.keys(nurseReqs).length > 0;
+          });
+          const unsubmitted = activeNurses.filter(n => {
+            const nurseReqs = monthReqs[String(n.id)] || {};
+            return Object.keys(nurseReqs).length === 0;
+          });
+
+          const exportUnsubmittedExcel = () => {
+            const wb = XLSX.utils.book_new();
+            // 未提出者シート
+            const data1 = unsubmitted.map((n, i) => ({
+              'No.': i + 1,
+              '氏名': n.name,
+              '役職': n.position,
+              'アクセスコード': generateFixedAccessCode(n.id, n.name),
+              '状態': '未提出'
+            }));
+            if (data1.length === 0) data1.push({ 'No.': '-', '氏名': '全員提出済み', '役職': '', 'アクセスコード': '', '状態': '' });
+            const ws1 = XLSX.utils.json_to_sheet(data1);
+            ws1['!cols'] = [{ wch: 5 }, { wch: 16 }, { wch: 8 }, { wch: 12 }, { wch: 8 }];
+            XLSX.utils.book_append_sheet(wb, ws1, '未提出者');
+            // 提出済みシート
+            const data2 = submitted.map((n, i) => {
+              const nurseReqs = monthReqs[String(n.id)] || {};
+              const reqDays = Object.entries(nurseReqs).map(([d, s]) => `${d}日:${s}`).join(', ');
+              return { 'No.': i + 1, '氏名': n.name, '役職': n.position, '希望内容': reqDays, '希望日数': Object.keys(nurseReqs).length };
+            });
+            const ws2 = XLSX.utils.json_to_sheet(data2);
+            ws2['!cols'] = [{ wch: 5 }, { wch: 16 }, { wch: 8 }, { wch: 50 }, { wch: 10 }];
+            XLSX.utils.book_append_sheet(wb, ws2, '提出済み');
+            XLSX.writeFile(wb, `希望提出状況_${targetYear}年${targetMonth + 1}月.xlsx`);
+          };
+
+          return (
+          <div className="fixed inset-0 bg-black/50 z-50 overflow-y-auto">
+            <div className="min-h-full flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl p-6 w-full max-w-lg my-4">
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-xl font-bold">希望提出状況（{targetYear}年{targetMonth + 1}月）</h3>
+                  <button onClick={() => setShowUnsubmitted(false)} className="p-2 hover:bg-gray-100 rounded-full">
+                    <X size={24} />
+                  </button>
+                </div>
+
+                {/* サマリー */}
+                <div className="grid grid-cols-3 gap-3 mb-4">
+                  <div className="bg-blue-50 rounded-xl p-3 text-center">
+                    <div className="text-2xl font-bold text-blue-700">{activeNurses.length}</div>
+                    <div className="text-xs text-blue-600">全職員</div>
+                  </div>
+                  <div className="bg-green-50 rounded-xl p-3 text-center">
+                    <div className="text-2xl font-bold text-green-700">{submitted.length}</div>
+                    <div className="text-xs text-green-600">提出済み</div>
+                  </div>
+                  <div className="bg-red-50 rounded-xl p-3 text-center">
+                    <div className="text-2xl font-bold text-red-700">{unsubmitted.length}</div>
+                    <div className="text-xs text-red-600">未提出</div>
+                  </div>
+                </div>
+
+                {/* 未提出者リスト */}
+                {unsubmitted.length > 0 ? (
+                  <div className="mb-4">
+                    <h4 className="font-semibold text-red-700 mb-2">⚠️ 未提出者（{unsubmitted.length}名）</h4>
+                    <div className="border border-red-200 rounded-lg max-h-48 overflow-y-auto">
+                      <table className="w-full">
+                        <thead className="bg-red-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-1.5 text-left text-xs">No.</th>
+                            <th className="px-3 py-1.5 text-left text-xs">氏名</th>
+                            <th className="px-3 py-1.5 text-left text-xs">役職</th>
+                            <th className="px-3 py-1.5 text-left text-xs">コード</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {unsubmitted.map((n, i) => (
+                            <tr key={n.id} className="border-t border-red-100">
+                              <td className="px-3 py-1.5 text-sm">{i + 1}</td>
+                              <td className="px-3 py-1.5 text-sm font-medium">{n.name}</td>
+                              <td className="px-3 py-1.5 text-sm">
+                                <span className={`text-xs px-1.5 py-0.5 rounded ${POSITIONS[n.position]?.color}`}>{n.position}</span>
+                              </td>
+                              <td className="px-3 py-1.5 text-sm font-mono text-gray-500">{generateFixedAccessCode(n.id, n.name)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-4 text-center">
+                    <CheckCircle className="mx-auto text-green-600 mb-1" size={32} />
+                    <p className="text-green-800 font-bold">全員提出済みです！</p>
+                  </div>
+                )}
+
+                {/* 提出済みリスト */}
+                {submitted.length > 0 && (
+                  <div className="mb-4">
+                    <h4 className="font-semibold text-green-700 mb-2">✅ 提出済み（{submitted.length}名）</h4>
+                    <div className="border border-green-200 rounded-lg max-h-36 overflow-y-auto">
+                      <table className="w-full">
+                        <thead className="bg-green-50 sticky top-0">
+                          <tr>
+                            <th className="px-3 py-1.5 text-left text-xs">氏名</th>
+                            <th className="px-3 py-1.5 text-left text-xs">役職</th>
+                            <th className="px-3 py-1.5 text-right text-xs">希望日数</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {submitted.map(n => {
+                            const cnt = Object.keys(monthReqs[String(n.id)] || {}).length;
+                            return (
+                              <tr key={n.id} className="border-t border-green-100">
+                                <td className="px-3 py-1.5 text-sm font-medium">{n.name}</td>
+                                <td className="px-3 py-1.5 text-sm">
+                                  <span className={`text-xs px-1.5 py-0.5 rounded ${POSITIONS[n.position]?.color}`}>{n.position}</span>
+                                </td>
+                                <td className="px-3 py-1.5 text-sm text-right">{cnt}日</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* ボタン */}
+                <div className="flex justify-end gap-3">
+                  <button
+                    onClick={exportUnsubmittedExcel}
+                    className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl flex items-center gap-2 transition-colors"
+                  >
+                    <Download size={16} />
+                    Excel出力
+                  </button>
+                  <button onClick={() => setShowUnsubmitted(false)}
+                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded-xl transition-colors">
+                    閉じる
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+          );
+        })()}
 
         {/* 希望確認モーダル（確認・消去のみ） */}
         {showRequestReview && (
