@@ -1733,12 +1733,15 @@ const HcuScheduleSystem = () => {
     // ② 現在の値を更新
     updateRequest(day, newValue);
 
-    // ③ 新しい値が「夜」→ 翌日「明」・翌々日「休」を自動セット
+    // ③ 新しい値が「夜」→ 翌日・翌々日が空の場合のみ自動セット
     if (newValue === '夜') {
-      if (day + 1 <= days) {
+      const monthKey = `${targetYear}-${targetMonth}`;
+      const nurseIdKey = String(staffNurseId);
+      const myReqs2 = requests[monthKey]?.[nurseIdKey] || {};
+      if (day + 1 <= days && !myReqs2[day + 1]) {
         updateRequest(day + 1, '明');
       }
-      if (day + 2 <= days) {
+      if (day + 2 <= days && !myReqs2[day + 2]) {
         updateRequest(day + 2, '休');
       }
     }
