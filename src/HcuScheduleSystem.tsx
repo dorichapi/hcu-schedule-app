@@ -4475,7 +4475,7 @@ const HcuScheduleSystem = () => {
                           onChange={(e) => setGenerateConfig(prev => ({ ...prev, weekdayDayStaff: parseInt(e.target.value) }))}
                           className="w-full px-3 py-2 border-2 rounded-lg"
                         >
-                          {Array.from({ length: 12 }, (_, i) => i + 7).map(n => (
+                          {Array.from({ length: 20 }, (_, i) => i + 1).map(n => (
                             <option key={n} value={n}>{n}人</option>
                           ))}
                         </select>
@@ -4487,7 +4487,7 @@ const HcuScheduleSystem = () => {
                           onChange={(e) => setGenerateConfig(prev => ({ ...prev, weekendDayStaff: parseInt(e.target.value) }))}
                           className="w-full px-3 py-2 border-2 rounded-lg"
                         >
-                          {Array.from({ length: 9 }, (_, i) => i + 7).map(n => (
+                          {Array.from({ length: 15 }, (_, i) => i + 1).map(n => (
                             <option key={n} value={n}>{n}人</option>
                           ))}
                         </select>
