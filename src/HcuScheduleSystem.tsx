@@ -3356,7 +3356,16 @@ const HcuScheduleSystem = () => {
                           );
                         })}
                         {/* 個人別統計 */}
-                        <td className={`border text-center bg-purple-50 font-bold text-purple-700 sticky z-[5] ${isMaximized ? 'p-0 text-[10px] right-[54px]' : 'p-1 right-[72px]'}`}>{stats.night}</td>
+                        {(() => {
+                          const pref = nurseShiftPrefs[nurse.id];
+                          const maxN = pref?.noNightShift ? 0 : (pref?.maxNightShifts ?? generateConfig.maxNightShifts);
+                          const differs = stats.night !== maxN;
+                          return (
+                            <td className={`border text-center bg-purple-50 font-bold text-purple-700 sticky z-[5] ${isMaximized ? 'p-0 text-[10px] right-[54px]' : 'p-1 right-[72px]'} ${differs ? 'border-2 border-red-500' : ''}`}>
+                              {stats.night}{differs && <span className="text-red-500 text-[9px]">({maxN})</span>}
+                            </td>
+                          );
+                        })()}
                         <td className={`border text-center bg-blue-50 font-bold text-blue-700 sticky z-[5] ${isMaximized ? 'p-0 text-[10px] right-[36px]' : 'p-1 right-[48px]'}`}>{stats.day}</td>
                         <td className={`border text-center bg-gray-100 font-bold text-gray-600 sticky z-[5] ${isMaximized ? 'p-0 text-[10px] right-[18px]' : 'p-1 right-[24px]'}`}>{stats.off}</td>
                         <td className={`border text-center bg-amber-50 font-bold text-amber-700 sticky right-0 z-[5] ${isMaximized ? 'p-0 text-[10px]' : 'p-1'}`}>{stats.work}</td>
