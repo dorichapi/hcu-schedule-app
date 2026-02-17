@@ -3164,13 +3164,14 @@ const HcuScheduleSystem = () => {
               // ② クリックしたセルの値を更新
               newData[nurseId][dayIndex] = newShift;
               
-              // ③ 新しいシフトが「夜」or「管夜」→ 翌日・翌々日が空の場合のみ自動セット
+              // ③ 新しいシフトが「夜」or「管夜」→ 翌日・翌々日を自動セット（既存の夜勤系は上書きしない）
               if (newShift === '夜' || newShift === '管夜') {
                 const akeType = newShift === '夜' ? '明' : '管明';
                 if (dayIndex + 1 < daysInMonth) {
                   const key1 = `${nurseId}-${dayIndex + 1}`;
                   const existing1 = newData[nurseId][dayIndex + 1];
-                  if (!existing1) {
+                  // 夜・管夜は上書きしない（別の夜勤シフト）、それ以外はバックアップして上書き
+                  if (existing1 !== '夜' && existing1 !== '管夜') {
                     bk[key1] = existing1;
                     newData[nurseId][dayIndex + 1] = akeType;
                     updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 2, akeType);
@@ -3179,7 +3180,8 @@ const HcuScheduleSystem = () => {
                 if (dayIndex + 2 < daysInMonth) {
                   const key2 = `${nurseId}-${dayIndex + 2}`;
                   const existing2 = newData[nurseId][dayIndex + 2];
-                  if (!existing2) {
+                  // 夜・管夜・明・管明は上書きしない
+                  if (existing2 !== '夜' && existing2 !== '管夜' && existing2 !== '明' && existing2 !== '管明') {
                     bk[key2] = existing2;
                     newData[nurseId][dayIndex + 2] = '休';
                     updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 3, '休');
