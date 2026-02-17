@@ -3121,16 +3121,35 @@ const HcuScheduleSystem = () => {
               const newData = JSON.parse(JSON.stringify(data));
               if (!newData[nurseId]) newData[nurseId] = new Array(daysInMonth).fill(null);
               
-              // ① 「夜」or「管夜」から別のシフトに変更 → バックアップがあれば復元
+              // ★ 特別処理: 夜→管夜 の切り替え（明→管明に差し替えるだけ）
+              if (currentShift === '夜' && newShift === '管夜') {
+                newData[nurseId][dayIndex] = '管夜';
+                if (dayIndex + 1 < daysInMonth && newData[nurseId][dayIndex + 1] === '明') {
+                  newData[nurseId][dayIndex + 1] = '管明';
+                  updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 2, '管明');
+                }
+                // 翌々日の「休」はそのまま（夜でも管夜でも休は共通）
+                return newData;
+              }
+
+              // ① 「夜」or「管夜」から別のシフトに変更 → 復元
               if ((currentShift === '夜' || currentShift === '管夜') && newShift !== currentShift) {
                 const key1 = `${nurseId}-${dayIndex + 1}`;
                 const key2 = `${nurseId}-${dayIndex + 2}`;
+                const currentAke = currentShift === '夜' ? '明' : '管明';
+                // バックアップがあれば復元
                 if (key1 in bk) {
                   if (dayIndex + 1 < daysInMonth) {
                     newData[nurseId][dayIndex + 1] = bk[key1];
                     updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 2, bk[key1]);
                   }
                   delete bk[key1];
+                } else {
+                  // バックアップなし（自動生成由来）→ 対応する明けのみクリア
+                  if (dayIndex + 1 < daysInMonth && newData[nurseId][dayIndex + 1] === currentAke) {
+                    newData[nurseId][dayIndex + 1] = null;
+                    updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 2, null);
+                  }
                 }
                 if (key2 in bk) {
                   if (dayIndex + 2 < daysInMonth) {
@@ -3139,6 +3158,7 @@ const HcuScheduleSystem = () => {
                   }
                   delete bk[key2];
                 }
+                // バックアップなしの休はそのまま残す（手動で設定した可能性）
               }
               
               // ② クリックしたセルの値を更新
