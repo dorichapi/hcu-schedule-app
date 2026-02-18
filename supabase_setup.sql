@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS nurses (
   id SERIAL PRIMARY KEY,
   name TEXT NOT NULL,
   position TEXT NOT NULL DEFAULT '一般',
+  department TEXT NOT NULL DEFAULT 'HCU',
   active BOOLEAN DEFAULT true,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -78,6 +79,19 @@ CREATE POLICY "Allow all access to settings" ON settings FOR ALL USING (true) WI
 -- インデックス（パフォーマンス改善）
 -- ============================================
 
+CREATE INDEX IF NOT EXISTS idx_nurses_department ON nurses(department);
 CREATE INDEX IF NOT EXISTS idx_requests_year_month ON requests(year, month);
 CREATE INDEX IF NOT EXISTS idx_schedules_year_month ON schedules(year, month);
 CREATE INDEX IF NOT EXISTS idx_prev_constraints_year_month ON prev_month_constraints(year, month);
+
+-- ============================================
+-- マイグレーション: 部門対応（既存DBに対して実行）
+-- ============================================
+-- 既存のnursesテーブルにdepartmentカラムを追加
+-- ALTER TABLE nurses ADD COLUMN department TEXT NOT NULL DEFAULT 'HCU';
+-- CREATE INDEX idx_nurses_department ON nurses(department);
+
+-- settingsテーブルの既存キーを部門プレフィックス付きにリネーム
+-- UPDATE settings SET key = 'nurseShiftPrefs-HCU' WHERE key = 'nurseShiftPrefs';
+-- UPDATE settings SET key = REPLACE(key, 'prevMonth-', 'prevMonth-HCU-')
+--   WHERE key LIKE 'prevMonth-%' AND key NOT LIKE 'prevMonth-HCU-%';
