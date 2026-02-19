@@ -541,8 +541,11 @@ const HcuScheduleSystem = () => {
     if (!ver) return;
     if (!confirm(`v${ver.version} を削除しますか？`)) return;
     const updated = scheduleVersions.filter(v => v.id !== id);
+    const maxVer = updated.length > 0 ? Math.max(...updated.map(v => v.version)) : 0;
+    const newNextVer = maxVer + 1;
     setScheduleVersions(updated);
-    saveVersionsToLocalStorage(updated, nextVersionNumber);
+    setNextVersionNumber(newNextVer);
+    saveVersionsToLocalStorage(updated, newNextVer);
   };
 
   // ============================================
