@@ -193,7 +193,13 @@ const HcuScheduleSystem = () => {
   const [newPasswordInput, setNewPasswordInput] = useState('');
   const [newPasswordConfirm, setNewPasswordConfirm] = useState('');
   const [passwordChangeError, setPasswordChangeError] = useState('');
-  
+
+  // 保存状態管理
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const saveStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 提出期限設定
   const [requestDeadline, setRequestDeadline] = useState({ day: 14, hour: 11, minute: 59 });
   
@@ -336,6 +342,68 @@ const HcuScheduleSystem = () => {
     loadData();
   }, [targetYear, targetMonth]);
 
+  // ページ離脱時の確認ダイアログ
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  // 保存ラッパー関数（保存状態管理 + LocalStorageバックアップ）
+  const saveWithStatus = async (saveFn: () => Promise<void>) => {
+    setSaveStatus('saving');
+    try {
+      await saveFn();
+      setSaveStatus('saved');
+      setLastSavedAt(new Date());
+      setHasUnsavedChanges(false);
+      // 3秒後にidle状態に戻す
+      if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 3000);
+    } catch (e) {
+      console.error('保存エラー:', e);
+      setSaveStatus('error');
+      setHasUnsavedChanges(true);
+    }
+  };
+
+  // LocalStorageバックアップ保存
+  const saveScheduleToLocalStorage = (scheduleData: any) => {
+    try {
+      const key = `hcu-schedule-backup-${targetYear}-${targetMonth}`;
+      localStorage.setItem(key, JSON.stringify(scheduleData));
+    } catch (e) {
+      console.error('LocalStorage保存エラー:', e);
+    }
+  };
+
+  // LocalStorageバックアップ復元
+  const loadScheduleFromLocalStorage = () => {
+    try {
+      const key = `hcu-schedule-backup-${targetYear}-${targetMonth}`;
+      const data = localStorage.getItem(key);
+      return data ? JSON.parse(data) : null;
+    } catch (e) {
+      console.error('LocalStorage読み込みエラー:', e);
+      return null;
+    }
+  };
+
+  // LocalStorageバックアップ削除
+  const clearScheduleFromLocalStorage = () => {
+    try {
+      const key = `hcu-schedule-backup-${targetYear}-${targetMonth}`;
+      localStorage.removeItem(key);
+    } catch (e) {
+      console.error('LocalStorage削除エラー:', e);
+    }
+  };
+
   // DBから最新のリクエストデータを再読み込み
   const reloadRequestsFromDB = async () => {
     try {
@@ -439,7 +507,7 @@ const HcuScheduleSystem = () => {
       active: true
     };
     setNurses([...nurses, newNurse]);
-    upsertNurseToDB(newNurse).catch(e => console.error('DB保存エラー:', e));
+    saveWithStatus(async () => { await upsertNurseToDB(newNurse); });
     setShowAddNurse(false);
     setNewNurseData({ name: '', position: '一般' });
   };
@@ -447,7 +515,7 @@ const HcuScheduleSystem = () => {
   const updateNurse = (id: any, updates: any) => {
     const updated = { ...nurses.find((n: any) => n.id === id), ...updates };
     setNurses(nurses.map((n: any) => n.id === id ? updated : n));
-    upsertNurseToDB(updated).catch(e => console.error('DB保存エラー:', e));
+    saveWithStatus(async () => { await upsertNurseToDB(updated); });
   };
 
   const deleteNurse = (id: any) => {
@@ -456,7 +524,7 @@ const HcuScheduleSystem = () => {
       return;
     }
     setNurses(nurses.filter((n: any) => n.id !== id));
-    deleteNurseFromDB(id).catch(e => console.error('DB削除エラー:', e));
+    saveWithStatus(async () => { await deleteNurseFromDB(id); });
   };
 
   // Excel読み込み
@@ -686,11 +754,13 @@ const HcuScheduleSystem = () => {
 
     // Supabaseに保存（月別キー）
     const pmKey = `prevMonth-${targetYear}-${targetMonth}`;
-    saveSettingToDB(pmKey, JSON.stringify({ data: confirmedData, constraints }))
-      .catch(e => console.error('前月データ保存エラー:', e));
+    saveWithStatus(async () => {
+      await saveSettingToDB(pmKey, JSON.stringify({ data: confirmedData, constraints }));
+    });
 
     // ★★★ 前月データ反映後、既存の勤務表を消去（希望＋前月データから再生成させる）★★★
     setSchedule(null);
+    clearScheduleFromLocalStorage();
     (async () => {
       try {
         await supabase.from('hcu_schedules').delete()
@@ -843,8 +913,9 @@ const HcuScheduleSystem = () => {
     setPrevMonthMapping({});
     // DBからも削除
     const pmKey = `prevMonth-${targetYear}-${targetMonth}`;
-    saveSettingToDB(pmKey, JSON.stringify({ data: null, constraints: {} }))
-      .catch(e => console.error('前月データ削除エラー:', e));
+    saveWithStatus(async () => {
+      await saveSettingToDB(pmKey, JSON.stringify({ data: null, constraints: {} }));
+    });
   };
 
   // 勤務表自動生成（本格版）
@@ -1625,7 +1696,10 @@ const HcuScheduleSystem = () => {
 
       setSchedule({ month: monthKey, data: finalSchedule });
       // DB保存
-      saveSchedulesToDB(targetYear, targetMonth, finalSchedule).catch(e => console.error('DB保存エラー:', e));
+      saveWithStatus(async () => {
+        await saveSchedulesToDB(targetYear, targetMonth, finalSchedule);
+        saveScheduleToLocalStorage(finalSchedule);
+      });
       setGenerating(false);
     }, 1500);
   };
@@ -1716,11 +1790,11 @@ const HcuScheduleSystem = () => {
     });
     // DB保存（エラー時にユーザーに通知）
     if (staffNurseId) {
-      saveRequestToDB(staffNurseId, targetYear, targetMonth, day, value)
-        .catch(e => {
-          console.error('DB保存失敗:', e);
-          alert('⚠️ 保存に失敗しました。管理者にお知らせください。\nエラー: ' + (e?.message || '不明'));
-        });
+      saveWithStatus(async () => {
+        await saveRequestToDB(staffNurseId, targetYear, targetMonth, day, value);
+      }).catch(() => {
+        alert('⚠️ 保存に失敗しました。管理者にお知らせください。');
+      });
     }
   };
 
@@ -1798,9 +1872,10 @@ const HcuScheduleSystem = () => {
     // ④ DB保存（state更新後に実行）
     setTimeout(() => {
       if (staffNurseId) {
-        Object.entries(dbChanges).forEach(([d, val]) => {
-          saveRequestToDB(staffNurseId, targetYear, targetMonth, Number(d), val)
-            .catch(e => console.error('DB保存失敗:', e));
+        saveWithStatus(async () => {
+          for (const [d, val] of Object.entries(dbChanges)) {
+            await saveRequestToDB(staffNurseId, targetYear, targetMonth, Number(d), val);
+          }
         });
       }
     }, 0);
@@ -2737,6 +2812,31 @@ const HcuScheduleSystem = () => {
             <div>
               <h1 className="text-2xl font-bold text-gray-800">HCU勤務表システム</h1>
               <p className="text-lg font-bold text-indigo-600">{targetYear}年{targetMonth + 1}月</p>
+              {/* 保存状態インジケーター */}
+              {saveStatus === 'saving' && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-sm animate-pulse">
+                  <RefreshCw size={14} className="animate-spin" />
+                  保存中...
+                </div>
+              )}
+              {saveStatus === 'saved' && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-sm">
+                  <CheckCircle size={14} />
+                  保存済み {lastSavedAt && `${String(lastSavedAt.getHours()).padStart(2, '0')}:${String(lastSavedAt.getMinutes()).padStart(2, '0')}`}
+                </div>
+              )}
+              {saveStatus === 'error' && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-sm">
+                  <AlertCircle size={14} />
+                  保存エラー
+                  <button
+                    onClick={() => setSaveStatus('idle')}
+                    className="underline hover:no-underline ml-1"
+                  >
+                    閉じる
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -2853,6 +2953,7 @@ const HcuScheduleSystem = () => {
                   onClick={() => {
                     if (confirm('勤務表データを消去しますか？\n\n※ 前月の読込データと職員の休み希望はそのまま保持されます。')) {
                       setSchedule(null);
+                      clearScheduleFromLocalStorage();
                       // DBから勤務表データのみ削除
                       (async () => {
                         try {
@@ -3205,7 +3306,9 @@ const HcuScheduleSystem = () => {
               const newData = updateData(baseData);
               setSchedule({ month: `${targetYear}-${targetMonth}`, data: newData });
             }
-            updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 1, newShift);
+            saveWithStatus(async () => {
+              await updateScheduleCellInDB(nurseId, targetYear, targetMonth, dayIndex + 1, newShift);
+            });
           };
 
           return (
@@ -4348,8 +4451,9 @@ const HcuScheduleSystem = () => {
                   <button
                     onClick={() => {
                       setNurseShiftPrefs({});
-                      saveSettingToDB('nurseShiftPrefs', JSON.stringify({}))
-                        .catch(e => console.error('職員設定リセットエラー:', e));
+                      saveWithStatus(async () => {
+                        await saveSettingToDB('nurseShiftPrefs', JSON.stringify({}));
+                      });
                     }}
                     className="px-4 py-2 text-gray-500 hover:text-red-500 text-sm"
                   >
@@ -4357,8 +4461,9 @@ const HcuScheduleSystem = () => {
                   </button>
                   <button
                     onClick={() => {
-                      saveSettingToDB('nurseShiftPrefs', JSON.stringify(nurseShiftPrefs))
-                        .catch(e => console.error('職員設定保存エラー:', e));
+                      saveWithStatus(async () => {
+                        await saveSettingToDB('nurseShiftPrefs', JSON.stringify(nurseShiftPrefs));
+                      });
                       setShowNurseShiftPrefs(false);
                     }}
                     className="px-6 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
