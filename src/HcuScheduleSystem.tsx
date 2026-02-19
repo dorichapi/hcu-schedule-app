@@ -143,7 +143,8 @@ interface ScheduleVersion {
 // メインコンポーネント
 // ============================================
 
-const HcuScheduleSystem = () => {
+const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' | 'ER'; onBack?: () => void }) => {
+  const departmentName = department === 'ER' ? '救急外来' : 'HCU';
   // システムモード: 'select' | 'admin' | 'dashboard' | 'adminSchedule' | 'staff'
   const [systemMode, setSystemMode] = useState('select');
   
@@ -424,7 +425,7 @@ const HcuScheduleSystem = () => {
   // バージョン管理: LocalStorage読み込み
   const loadVersionsFromLocalStorage = (year: number, month: number) => {
     try {
-      const key = `scheduleVersions-HCU-${year}-${month}`;
+      const key = `scheduleVersions-${department}-${year}-${month}`;
       const data = localStorage.getItem(key);
       if (data) {
         const parsed = JSON.parse(data);
@@ -444,7 +445,7 @@ const HcuScheduleSystem = () => {
   // バージョン管理: LocalStorage保存
   const saveVersionsToLocalStorage = (versions: ScheduleVersion[], nextVer: number) => {
     try {
-      const key = `scheduleVersions-HCU-${targetYear}-${targetMonth}`;
+      const key = `scheduleVersions-${department}-${targetYear}-${targetMonth}`;
       localStorage.setItem(key, JSON.stringify({ versions, nextVersionNumber: nextVer }));
     } catch (e) {
       console.error('バージョン保存エラー:', e);
@@ -1948,7 +1949,7 @@ const HcuScheduleSystem = () => {
 
     const wb = XLSX.utils.book_new();
     const scheduleData = [
-      [`HCU ${targetYear}年${targetMonth + 1}月 勤務表`],
+      [`${departmentName} ${targetYear}年${targetMonth + 1}月 勤務表`],
       ['氏名', '役職', ...Array.from({ length: daysInMonth }, (_, i) => `${i + 1}`)]
     ];
 
@@ -1960,7 +1961,7 @@ const HcuScheduleSystem = () => {
     const ws = XLSX.utils.aoa_to_sheet(scheduleData);
     XLSX.utils.book_append_sheet(wb, ws, '勤務表');
 
-    const fileName = `勤務表_${targetYear}年${targetMonth + 1}月_${new Date().toISOString().slice(0, 10)}.xlsx`;
+    const fileName = `${departmentName}_勤務表_${targetYear}年${targetMonth + 1}月_${new Date().toISOString().slice(0, 10)}.xlsx`;
     XLSX.writeFile(wb, fileName);
   };
 
@@ -2142,7 +2143,7 @@ const HcuScheduleSystem = () => {
             <div className="bg-gradient-to-br from-teal-500 to-cyan-600 p-5 rounded-2xl inline-block mb-5 shadow-lg">
               <Calendar className="text-white" size={56} />
             </div>
-            <h1 className="text-3xl font-bold text-gray-800 mb-2">HCU勤務表システム</h1>
+            <h1 className="text-3xl font-bold text-gray-800 mb-2">{departmentName}勤務表システム</h1>
             <p className="text-lg font-bold text-indigo-600">{targetYear}年{targetMonth + 1}月</p>
           </div>
 
@@ -2172,6 +2173,15 @@ const HcuScheduleSystem = () => {
               職員用（休み希望入力）
             </button>
           </div>
+
+          {onBack && (
+            <button
+              onClick={onBack}
+              className="w-full mt-6 px-4 py-3 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-xl transition-colors text-sm"
+            >
+              ← 部門選択に戻る
+            </button>
+          )}
 
           <p className="text-center text-xs text-gray-400 mt-8">
             データはサーバーに安全に保存されます
@@ -2268,7 +2278,7 @@ const HcuScheduleSystem = () => {
               <div>
                 <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                   <FileSpreadsheet className="text-indigo-600" size={24} />
-                  HCU勤務表管理システム
+                  {departmentName}勤務表管理システム
                 </h1>
                 <p className="text-sm text-gray-500">ダッシュボード</p>
               </div>
@@ -3045,7 +3055,7 @@ const HcuScheduleSystem = () => {
         <div className="bg-white/90 backdrop-blur-sm rounded-2xl shadow-lg p-5 mb-6 border border-white/50">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-bold text-gray-800">HCU勤務表システム</h1>
+              <h1 className="text-2xl font-bold text-gray-800">{departmentName}勤務表システム</h1>
               <p className="text-lg font-bold text-indigo-600">{targetYear}年{targetMonth + 1}月</p>
               {/* 保存状態インジケーター */}
               {saveStatus === 'saving' && (
