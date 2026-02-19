@@ -193,7 +193,13 @@ const NurseScheduleSystem = () => {
   const [isMaximized, setIsMaximized] = useState(false); // 勤務表最大化
   const [showDeadlineSettings, setShowDeadlineSettings] = useState(false); // 締め切り設定モーダル
   const [showPasswordChange, setShowPasswordChange] = useState(false); // パスワード変更モーダル
-  
+
+  // 保存状態管理
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const saveStatusTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 提出期限設定
   const [requestDeadline, setRequestDeadline] = useState({ day: 14, hour: 11, minute: 59 });
   
@@ -263,8 +269,33 @@ const NurseScheduleSystem = () => {
             schedData[s.nurse_id][s.day - 1] = s.shift;
           });
           setSchedule({ month: `${targetYear}-${targetMonth}`, data: schedData });
+          // DB保存成功済みなのでLocalStorageバックアップも更新
+          try {
+            const lsKey = `schedule-backup-${selectedDepartment}-${targetYear}-${targetMonth}`;
+            localStorage.setItem(lsKey, JSON.stringify(schedData));
+          } catch (e) { /* ignore */ }
         } else {
-          setSchedule(null);
+          // DBにデータがない場合、LocalStorageバックアップから復元を提案
+          try {
+            const lsKey = `schedule-backup-${selectedDepartment}-${targetYear}-${targetMonth}`;
+            const backup = localStorage.getItem(lsKey);
+            if (backup) {
+              const backupData = JSON.parse(backup);
+              if (confirm('前回の勤務表データのバックアップが見つかりました。復元しますか？')) {
+                setSchedule({ month: `${targetYear}-${targetMonth}`, data: backupData });
+                // DB にも再保存
+                saveSchedulesToDB(targetYear, targetMonth, backupData, Object.keys(backupData).map(Number))
+                  .catch(e => console.error('バックアップ復元保存エラー:', e));
+              } else {
+                localStorage.removeItem(lsKey);
+                setSchedule(null);
+              }
+            } else {
+              setSchedule(null);
+            }
+          } catch (e) {
+            setSchedule(null);
+          }
         }
 
         // 前月データの読み込み（部門・月別キーで保存）
@@ -323,6 +354,18 @@ const NurseScheduleSystem = () => {
     loadData();
   }, [targetYear, targetMonth, selectedDepartment]);
 
+  // ページ離脱時の確認ダイアログ
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   // DBから最新のリクエストデータを再読み込み
   const reloadRequestsFromDB = async () => {
     try {
@@ -379,6 +422,56 @@ const NurseScheduleSystem = () => {
       ...n,
       accessCode: generateFixedAccessCode(n.id, n.name)
     })), [activeNurses]);
+
+  // 保存ラッパー関数（保存状態管理 + LocalStorageバックアップ）
+  const saveWithStatus = async (saveFn: () => Promise<void>) => {
+    setSaveStatus('saving');
+    try {
+      await saveFn();
+      setSaveStatus('saved');
+      setLastSavedAt(new Date());
+      setHasUnsavedChanges(false);
+      // 3秒後にidle状態に戻す
+      if (saveStatusTimerRef.current) clearTimeout(saveStatusTimerRef.current);
+      saveStatusTimerRef.current = setTimeout(() => setSaveStatus('idle'), 3000);
+    } catch (e) {
+      console.error('保存エラー:', e);
+      setSaveStatus('error');
+      setHasUnsavedChanges(true);
+    }
+  };
+
+  // LocalStorageバックアップ保存
+  const saveScheduleToLocalStorage = (scheduleData: any) => {
+    try {
+      const key = `schedule-backup-${selectedDepartment}-${targetYear}-${targetMonth}`;
+      localStorage.setItem(key, JSON.stringify(scheduleData));
+    } catch (e) {
+      console.error('LocalStorage保存エラー:', e);
+    }
+  };
+
+  // LocalStorageバックアップ復元
+  const loadScheduleFromLocalStorage = () => {
+    try {
+      const key = `schedule-backup-${selectedDepartment}-${targetYear}-${targetMonth}`;
+      const data = localStorage.getItem(key);
+      return data ? JSON.parse(data) : null;
+    } catch (e) {
+      console.error('LocalStorage読み込みエラー:', e);
+      return null;
+    }
+  };
+
+  // LocalStorageバックアップ削除
+  const clearScheduleFromLocalStorage = () => {
+    try {
+      const key = `schedule-backup-${selectedDepartment}-${targetYear}-${targetMonth}`;
+      localStorage.removeItem(key);
+    } catch (e) {
+      console.error('LocalStorage削除エラー:', e);
+    }
+  };
 
   // ============================================
   // 管理者機能
@@ -653,11 +746,13 @@ const NurseScheduleSystem = () => {
 
     // Supabaseに保存（部門・月別キー）
     const pmKey = `prevMonth-${selectedDepartment}-${targetYear}-${targetMonth}`;
-    saveSettingToDB(pmKey, JSON.stringify({ data: confirmedData, constraints }))
-      .catch(e => console.error('前月データ保存エラー:', e));
+    saveWithStatus(async () => {
+      await saveSettingToDB(pmKey, JSON.stringify({ data: confirmedData, constraints }));
+    });
 
     // ★★★ 前月データ反映後、既存の勤務表を消去（希望＋前月データから再生成させる）★★★
     setSchedule(null);
+    clearScheduleFromLocalStorage();
     (async () => {
       try {
         const deptNurseIds = activeNurses.map(n => n.id);
@@ -833,8 +928,9 @@ const NurseScheduleSystem = () => {
     setPrevMonthMapping({});
     // DBからも削除（部門・月別キー）
     const pmKey = `prevMonth-${selectedDepartment}-${targetYear}-${targetMonth}`;
-    saveSettingToDB(pmKey, JSON.stringify({ data: null, constraints: {} }))
-      .catch(e => console.error('前月データ削除エラー:', e));
+    saveWithStatus(async () => {
+      await saveSettingToDB(pmKey, JSON.stringify({ data: null, constraints: {} }));
+    });
   };
 
   // 勤務表自動生成（本格版）
@@ -1485,8 +1581,11 @@ const NurseScheduleSystem = () => {
       });
 
       setSchedule({ month: monthKey, data: finalSchedule });
-      // DB保存
-      saveSchedulesToDB(targetYear, targetMonth, finalSchedule, activeNurses.map(n => n.id)).catch(e => console.error('DB保存エラー:', e));
+      // DB保存 + LocalStorageバックアップ
+      saveWithStatus(async () => {
+        await saveSchedulesToDB(targetYear, targetMonth, finalSchedule, activeNurses.map(n => n.id));
+        saveScheduleToLocalStorage(finalSchedule);
+      });
       setGenerating(false);
     }, 1500);
   };
@@ -2301,6 +2400,31 @@ const NurseScheduleSystem = () => {
                 </span>
                 <p className="text-lg font-bold text-indigo-600">{targetYear}年{targetMonth + 1}月</p>
               </div>
+              {/* 保存状態インジケーター */}
+              {saveStatus === 'saving' && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-sm animate-pulse">
+                  <RefreshCw size={14} className="animate-spin" />
+                  保存中...
+                </div>
+              )}
+              {saveStatus === 'saved' && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-lg text-sm">
+                  <CheckCircle size={14} />
+                  保存済み {lastSavedAt && `${String(lastSavedAt.getHours()).padStart(2, '0')}:${String(lastSavedAt.getMinutes()).padStart(2, '0')}`}
+                </div>
+              )}
+              {saveStatus === 'error' && (
+                <div className="flex items-center gap-2 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-sm">
+                  <AlertCircle size={14} />
+                  保存エラー
+                  <button
+                    onClick={() => setSaveStatus('idle')}
+                    className="underline hover:no-underline ml-1"
+                  >
+                    閉じる
+                  </button>
+                </div>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -2407,6 +2531,7 @@ const NurseScheduleSystem = () => {
                   onClick={() => {
                     if (confirm('勤務表データを消去しますか？\n\n※ 前月の読込データと職員の休み希望はそのまま保持されます。')) {
                       setSchedule(null);
+                      clearScheduleFromLocalStorage();
                       // DBから勤務表データのみ削除
                       (async () => {
                         try {
@@ -2902,7 +3027,9 @@ const NurseScheduleSystem = () => {
                                 const newData = doUpdate(baseData);
                                 setSchedule({ month: `${targetYear}-${targetMonth}`, data: newData });
                               }
-                              updateScheduleCellInDB(nurse.id, targetYear, targetMonth, day, newShift);
+                              saveWithStatus(async () => {
+                                await updateScheduleCellInDB(nurse.id, targetYear, targetMonth, day, newShift);
+                              });
                             }}
                             className={`border p-1 text-center cursor-pointer hover:bg-blue-50 transition-colors ${SHIFT_TYPES[shift]?.color || ''} ${
                               matchesRequest ? 'border-2 border-green-500' :
@@ -3904,8 +4031,9 @@ const NurseScheduleSystem = () => {
                   <button
                     onClick={() => {
                       setNurseShiftPrefs({});
-                      saveSettingToDB(`nurseShiftPrefs-${selectedDepartment}`, JSON.stringify({}))
-                        .catch(e => console.error('職員設定リセットエラー:', e));
+                      saveWithStatus(async () => {
+                        await saveSettingToDB(`nurseShiftPrefs-${selectedDepartment}`, JSON.stringify({}));
+                      });
                     }}
                     className="px-4 py-2 text-gray-500 hover:text-red-500 text-sm"
                   >
@@ -3913,8 +4041,9 @@ const NurseScheduleSystem = () => {
                   </button>
                   <button
                     onClick={() => {
-                      saveSettingToDB(`nurseShiftPrefs-${selectedDepartment}`, JSON.stringify(nurseShiftPrefs))
-                        .catch(e => console.error('職員設定保存エラー:', e));
+                      saveWithStatus(async () => {
+                        await saveSettingToDB(`nurseShiftPrefs-${selectedDepartment}`, JSON.stringify(nurseShiftPrefs));
+                      });
                       setShowNurseShiftPrefs(false);
                     }}
                     className="px-6 py-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 transition-colors"
