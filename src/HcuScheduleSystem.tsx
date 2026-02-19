@@ -1213,7 +1213,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           sc[n.id][day] = '夜'; st[n.id].nightCount++; st[n.id].totalWork++;
           if (isSp) st[n.id].weekendWork++;
           if (day + 1 < daysInMonth && !sc[n.id][day + 1]) sc[n.id][day + 1] = '明';
-          if (day + 2 < daysInMonth && !sc[n.id][day + 2]) { sc[n.id][day + 2] = '休'; st[n.id].daysOff++; }
+          if (day + 2 < daysInMonth && !sc[n.id][day + 2] && !exReqs[n.id]?.[day + 2]) { sc[n.id][day + 2] = '休'; st[n.id].daysOff++; }
         });
 
         // 日勤割り当て
@@ -1468,6 +1468,10 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
     setGeneratingPhase('フェーズ4: 最終検証・修正...');
     await tick();
 
+    // 希望保護ヘルパー: 希望がある日は上書きしない
+    const hasReq = (nid: number, d: number) => !!exReqs[nid]?.[d];
+    const reqAt = (nid: number, d: number) => exReqs[nid]?.[d];
+
     // A. 夜勤人数の強制調整
     for (let day = 0; day < daysInMonth; day++) {
       const nReq = getNightReq(day);
@@ -1477,6 +1481,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       while (nc < nReq) {
         const cands = activeNurses.filter(n => {
           if (isNightShift(adj[n.id][day]) || isAkeShift(adj[n.id][day])) return false;
+          // 希望がある日は夜勤に変更しない
+          if (hasReq(n.id, day) && reqAt(n.id, day) !== '夜') return false;
+          if (day + 1 < daysInMonth && hasReq(n.id, day + 1) && reqAt(n.id, day + 1) !== '明') return false;
           if (day > 0 && isNightShift(adj[n.id][day - 1])) return false;
           if (day + 1 < daysInMonth && isNightShift(adj[n.id][day + 1])) return false;
           const pr = nurseShiftPrefs[n.id];
@@ -1489,96 +1496,106 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
         if (cands.length === 0) break;
         const pk = cands[0];
         adj[pk.id][day] = '夜';
-        if (day + 1 < daysInMonth) adj[pk.id][day + 1] = '明';
-        if (day + 2 < daysInMonth && !isNightShift(adj[pk.id][day + 2])) adj[pk.id][day + 2] = '休';
+        if (day + 1 < daysInMonth && !hasReq(pk.id, day + 1)) adj[pk.id][day + 1] = '明';
+        else if (day + 1 < daysInMonth) adj[pk.id][day + 1] = '明'; // 夜→明は安全上必須
+        if (day + 2 < daysInMonth && !isNightShift(adj[pk.id][day + 2]) && !hasReq(pk.id, day + 2)) adj[pk.id][day + 2] = '休';
         nc++;
       }
       while (nc > nReq) {
-        const nns = activeNurses.filter(n => adj[n.id][day] === '夜');
+        // 希望で夜勤の人は除外
+        const nns = activeNurses.filter(n => adj[n.id][day] === '夜' && reqAt(n.id, day) !== '夜');
         if (nns.length === 0) break;
         nns.sort((a, b) => adj[b.id].filter((s: any) => isNightShift(s)).length - adj[a.id].filter((s: any) => isNightShift(s)).length);
         adj[nns[0].id][day] = '日';
-        if (day + 1 < daysInMonth && adj[nns[0].id][day + 1] === '明') adj[nns[0].id][day + 1] = '日';
+        if (day + 1 < daysInMonth && adj[nns[0].id][day + 1] === '明' && !hasReq(nns[0].id, day + 1)) adj[nns[0].id][day + 1] = '日';
         nc--;
       }
     }
 
-    // B. 夜→明→休整合性
+    // B. 夜→明→休整合性（希望保護付き）
     activeNurses.forEach(n => {
       for (let d = 0; d < daysInMonth; d++) {
+        // 夜→明は安全上必須（明は夜の翌日として自動配置）
         if (adj[n.id][d] === '夜' && d + 1 < daysInMonth && adj[n.id][d + 1] !== '明') adj[n.id][d + 1] = '明';
         if (adj[n.id][d] === '管夜' && d + 1 < daysInMonth && adj[n.id][d + 1] !== '管明') adj[n.id][d + 1] = '管明';
-        if (adj[n.id][d] === '夜' && d + 2 < daysInMonth && !isNightShift(adj[n.id][d + 2]) && !isAkeShift(adj[n.id][d + 2])) adj[n.id][d + 2] = '休';
-        if (adj[n.id][d] === '管夜' && d + 2 < daysInMonth && !isNightShift(adj[n.id][d + 2]) && !isAkeShift(adj[n.id][d + 2])) adj[n.id][d + 2] = '休';
+        // 夜→明→休の休は希望がなければ配置
+        if (adj[n.id][d] === '夜' && d + 2 < daysInMonth && !isNightShift(adj[n.id][d + 2]) && !isAkeShift(adj[n.id][d + 2]) && !hasReq(n.id, d + 2)) adj[n.id][d + 2] = '休';
+        if (adj[n.id][d] === '管夜' && d + 2 < daysInMonth && !isNightShift(adj[n.id][d + 2]) && !isAkeShift(adj[n.id][d + 2]) && !hasReq(n.id, d + 2)) adj[n.id][d + 2] = '休';
       }
-      // 夜明夜明→休休
+      // 夜明夜明→休休（希望保護）
       for (let d = 0; d < daysInMonth - 5; d++) {
         if (isNightShift(adj[n.id][d]) && isAkeShift(adj[n.id][d+1]) && isNightShift(adj[n.id][d+2]) && isAkeShift(adj[n.id][d+3])) {
-          if (d + 4 < daysInMonth && adj[n.id][d+4] !== '休') adj[n.id][d+4] = '休';
-          if (d + 5 < daysInMonth && adj[n.id][d+5] !== '休') adj[n.id][d+5] = '休';
+          if (d + 4 < daysInMonth && adj[n.id][d+4] !== '休' && !hasReq(n.id, d+4)) adj[n.id][d+4] = '休';
+          if (d + 5 < daysInMonth && adj[n.id][d+5] !== '休' && !hasReq(n.id, d+5)) adj[n.id][d+5] = '休';
         }
       }
-      // 夜明3連禁止
+      // 夜明3連禁止（希望保護）
       for (let d = 0; d < daysInMonth - 4; d++) {
         if (isNightShift(adj[n.id][d]) && isAkeShift(adj[n.id][d+1]) && isNightShift(adj[n.id][d+2]) && isAkeShift(adj[n.id][d+3]) && d+4 < daysInMonth && isNightShift(adj[n.id][d+4])) {
-          adj[n.id][d+4] = '休';
-          if (d+5 < daysInMonth && isAkeShift(adj[n.id][d+5])) adj[n.id][d+5] = '休';
+          if (!hasReq(n.id, d+4)) adj[n.id][d+4] = '休';
+          if (d+5 < daysInMonth && isAkeShift(adj[n.id][d+5]) && !hasReq(n.id, d+5)) adj[n.id][d+5] = '休';
         }
       }
-      // 職員別夜勤上限
+      // 職員別夜勤上限（希望保護済み）
       const pr = nurseShiftPrefs[n.id];
       const mx = pr?.noNightShift ? 0 : (pr?.maxNightShifts ?? cfg.maxNightShifts);
       let nc2 = adj[n.id].filter((s: any) => isNightShift(s)).length;
       if (nc2 > mx) {
         for (let d = daysInMonth - 1; d >= 0 && nc2 > mx; d--) {
-          if (adj[n.id][d] === '夜' && exReqs[n.id]?.[d] !== '夜') {
+          if (adj[n.id][d] === '夜' && reqAt(n.id, d) !== '夜') {
             adj[n.id][d] = '日';
-            if (d + 1 < daysInMonth && adj[n.id][d + 1] === '明') adj[n.id][d + 1] = '日';
+            if (d + 1 < daysInMonth && adj[n.id][d + 1] === '明' && !hasReq(n.id, d + 1)) adj[n.id][d + 1] = '日';
             nc2--;
           }
         }
       }
     });
 
-    // C. 孤立明除去
+    // C. 孤立明除去（希望保護）
     activeNurses.forEach(n => {
       for (let d = 0; d < daysInMonth; d++) {
-        if (adj[n.id][d] === '明' && (d === 0 || adj[n.id][d - 1] !== '夜')) adj[n.id][d] = '休';
-        if (adj[n.id][d] === '管明' && (d === 0 || adj[n.id][d - 1] !== '管夜')) adj[n.id][d] = '休';
+        if (adj[n.id][d] === '明' && (d === 0 || adj[n.id][d - 1] !== '夜') && !hasReq(n.id, d)) adj[n.id][d] = '休';
+        if (adj[n.id][d] === '管明' && (d === 0 || adj[n.id][d - 1] !== '管夜') && !hasReq(n.id, d)) adj[n.id][d] = '休';
       }
     });
 
-    // D. 夜勤人数最終修正
+    // D. 夜勤人数最終修正（希望保護付き）
     for (let day = 0; day < daysInMonth; day++) {
       const nReq = getNightReq(day);
       let nc = 0;
       activeNurses.forEach(n => { if (isNightShift(adj[n.id][day])) nc++; });
       while (nc < nReq) {
-        const c = activeNurses.filter(n => !isNightShift(adj[n.id][day]) && !isAkeShift(adj[n.id][day]) && !(day > 0 && isNightShift(adj[n.id][day-1])) && !(day+1 < daysInMonth && isNightShift(adj[n.id][day+1])) && !nurseShiftPrefs[n.id]?.noNightShift && adj[n.id].filter((s: any) => isNightShift(s)).length < (nurseShiftPrefs[n.id]?.maxNightShifts ?? cfg.maxNightShifts))
+        const c = activeNurses.filter(n => !isNightShift(adj[n.id][day]) && !isAkeShift(adj[n.id][day])
+          && (!hasReq(n.id, day) || reqAt(n.id, day) === '夜')
+          && !(day + 1 < daysInMonth && hasReq(n.id, day + 1) && reqAt(n.id, day + 1) !== '明')
+          && !(day > 0 && isNightShift(adj[n.id][day-1])) && !(day+1 < daysInMonth && isNightShift(adj[n.id][day+1]))
+          && !nurseShiftPrefs[n.id]?.noNightShift && adj[n.id].filter((s: any) => isNightShift(s)).length < (nurseShiftPrefs[n.id]?.maxNightShifts ?? cfg.maxNightShifts))
           .sort((a, b) => adj[a.id].filter((s: any) => isNightShift(s)).length - adj[b.id].filter((s: any) => isNightShift(s)).length);
         if (c.length === 0) break;
         adj[c[0].id][day] = '夜';
-        if (day + 1 < daysInMonth) adj[c[0].id][day + 1] = '明';
-        if (day + 2 < daysInMonth && !isNightShift(adj[c[0].id][day + 2])) adj[c[0].id][day + 2] = '休';
+        if (day + 1 < daysInMonth) adj[c[0].id][day + 1] = '明'; // 夜→明は安全上必須
+        if (day + 2 < daysInMonth && !isNightShift(adj[c[0].id][day + 2]) && !hasReq(c[0].id, day + 2)) adj[c[0].id][day + 2] = '休';
         nc++;
       }
       while (nc > nReq) {
-        const nn = activeNurses.filter(n => adj[n.id][day] === '夜');
+        const nn = activeNurses.filter(n => adj[n.id][day] === '夜' && reqAt(n.id, day) !== '夜');
         if (nn.length === 0) break;
         nn.sort((a, b) => adj[b.id].filter((s: any) => isNightShift(s)).length - adj[a.id].filter((s: any) => isNightShift(s)).length);
         adj[nn[0].id][day] = '日';
-        if (day + 1 < daysInMonth && adj[nn[0].id][day + 1] === '明') adj[nn[0].id][day + 1] = '日';
+        if (day + 1 < daysInMonth && adj[nn[0].id][day + 1] === '明' && !hasReq(nn[0].id, day + 1)) adj[nn[0].id][day + 1] = '日';
         nc--;
       }
     }
 
-    // E. 最終夜→明 + 孤立明除去
+    // E. 最終夜→明 + 孤立明除去（希望保護付き）
     activeNurses.forEach(n => {
       for (let d = 0; d < daysInMonth; d++) {
+        // 夜→明は安全上必須
         if (adj[n.id][d] === '夜' && d + 1 < daysInMonth && adj[n.id][d + 1] !== '明') adj[n.id][d + 1] = '明';
         if (adj[n.id][d] === '管夜' && d + 1 < daysInMonth && adj[n.id][d + 1] !== '管明') adj[n.id][d + 1] = '管明';
-        if (adj[n.id][d] === '明' && (d === 0 || adj[n.id][d - 1] !== '夜')) adj[n.id][d] = '休';
-        if (adj[n.id][d] === '管明' && (d === 0 || adj[n.id][d - 1] !== '管夜')) adj[n.id][d] = '休';
+        // 孤立明は希望でなければ除去
+        if (adj[n.id][d] === '明' && (d === 0 || adj[n.id][d - 1] !== '夜') && !hasReq(n.id, d)) adj[n.id][d] = '休';
+        if (adj[n.id][d] === '管明' && (d === 0 || adj[n.id][d - 1] !== '管夜') && !hasReq(n.id, d)) adj[n.id][d] = '休';
       }
     });
 
