@@ -1684,6 +1684,59 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       }
     });
 
+    // I. 日勤人数の最終保証
+    for (let day = 0; day < daysInMonth; day++) {
+      const dayReq = getDayStaffReq(day);
+      let dc = 0;
+      activeNurses.forEach(n => { if (adj[n.id][day] === '日') dc++; });
+
+      // 日勤不足 → 休みの人を日勤に変更
+      while (dc < dayReq) {
+        const cands = activeNurses.filter(n => {
+          if (adj[n.id][day] !== '休') return false;
+          if (isLocked(n.id, day)) return false;
+          if (nurseShiftPrefs[n.id]?.noDayShift) return false;
+          if (isSunday(day) && n.position === '師長') return false;
+          // 休日数が最低限を割らないか
+          const off = adj[n.id].filter((s: any) => isOff(s)).length;
+          if (off <= cfg.minDaysOff) return false;
+          // 連続勤務チェック
+          let before = 0;
+          for (let d = day - 1; d >= 0; d--) { if (isWorkShift(adj[n.id][d])) before++; else break; }
+          let after = 0;
+          for (let d = day + 1; d < daysInMonth; d++) { if (isWorkShift(adj[n.id][d])) after++; else break; }
+          if (before + 1 + after > cfg.maxConsec) return false;
+          return true;
+        }).sort((a, b) => {
+          // 休日が多い人を優先的に日勤に変更
+          const aOff = adj[a.id].filter((s: any) => isOff(s)).length;
+          const bOff = adj[b.id].filter((s: any) => isOff(s)).length;
+          return bOff - aOff;
+        });
+        if (cands.length === 0) break;
+        adj[cands[0].id][day] = '日';
+        dc++;
+      }
+
+      // 日勤過多（平日8人超え）→ 日勤の人を休みに変更
+      const maxDay = isWeekendOrHoliday(day) ? dayReq : 8;
+      while (dc > maxDay) {
+        const cands = activeNurses.filter(n => {
+          if (adj[n.id][day] !== '日') return false;
+          if (isLocked(n.id, day)) return false;
+          return true;
+        }).sort((a, b) => {
+          // 休日が少ない人を優先的に休みに変更
+          const aOff = adj[a.id].filter((s: any) => isOff(s)).length;
+          const bOff = adj[b.id].filter((s: any) => isOff(s)).length;
+          return aOff - bOff;
+        });
+        if (cands.length === 0) break;
+        adj[cands[0].id][day] = '休';
+        dc--;
+      }
+    }
+
     // ============ 最終スケジュール & 検証レポート ============
     const final: Record<string, any> = {};
     activeNurses.forEach(n => { final[n.id] = adj[n.id]; });
