@@ -1700,23 +1700,121 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       }
     });
 
-    // I. 日勤人数の最終保証
+    // I. 日勤人数の最終保証（3段階）
+
+    // I-1. 日別の直接調整（複数パス）
+    for (let pass = 0; pass < 5; pass++) {
+      let improved = false;
+      for (let day = 0; day < daysInMonth; day++) {
+        const dayReq = getDayStaffReq(day);
+        let dc = 0;
+        activeNurses.forEach(n => { if (adj[n.id][day] === '日') dc++; });
+
+        // 日勤不足 → 休みの人を日勤に変更
+        while (dc < dayReq) {
+          const cands = activeNurses.filter(n => {
+            if (adj[n.id][day] !== '休') return false;
+            if (isLocked(n.id, day)) return false;
+            if (nurseShiftPrefs[n.id]?.noDayShift) return false;
+            if (isSunday(day) && n.position === '師長') return false;
+            const off = adj[n.id].filter((s: any) => isOff(s)).length;
+            if (off <= cfg.minDaysOff) return false;
+            let before = 0;
+            for (let d = day - 1; d >= 0; d--) { if (isWorkShift(adj[n.id][d])) before++; else break; }
+            let after = 0;
+            for (let d = day + 1; d < daysInMonth; d++) { if (isWorkShift(adj[n.id][d])) after++; else break; }
+            if (before + 1 + after > cfg.maxConsec) return false;
+            return true;
+          }).sort((a, b) => {
+            const aNight = adj[a.id].filter((s: any) => isNightShift(s)).length;
+            const bNight = adj[b.id].filter((s: any) => isNightShift(s)).length;
+            const aLow = aNight < 3 ? 0 : 1;
+            const bLow = bNight < 3 ? 0 : 1;
+            if (aLow !== bLow) return aLow - bLow;
+            const aOff = adj[a.id].filter((s: any) => isOff(s)).length;
+            const bOff = adj[b.id].filter((s: any) => isOff(s)).length;
+            return bOff - aOff;
+          });
+          if (cands.length === 0) break;
+          adj[cands[0].id][day] = '日';
+          dc++;
+          improved = true;
+        }
+
+        // 日勤過多 → 日勤の人を休みに変更
+        while (dc > dayReq) {
+          const cands = activeNurses.filter(n => {
+            if (adj[n.id][day] !== '日') return false;
+            if (isLocked(n.id, day)) return false;
+            return true;
+          }).sort((a, b) => {
+            const aOff = adj[a.id].filter((s: any) => isOff(s)).length;
+            const bOff = adj[b.id].filter((s: any) => isOff(s)).length;
+            return aOff - bOff;
+          });
+          if (cands.length === 0) break;
+          adj[cands[0].id][day] = '休';
+          dc--;
+          improved = true;
+        }
+      }
+      if (!improved) break;
+    }
+
+    // I-2. 日別スワップ（過多日→不足日で同一看護師の日勤と休みを交換）
+    for (let pass = 0; pass < 10; pass++) {
+      let swapped = false;
+      const dayCounts: number[] = [];
+      for (let d = 0; d < daysInMonth; d++) {
+        let c = 0; activeNurses.forEach(n => { if (adj[n.id][d] === '日') c++; }); dayCounts.push(c);
+      }
+
+      for (let shortDay = 0; shortDay < daysInMonth && !swapped; shortDay++) {
+        const reqS = getDayStaffReq(shortDay);
+        if (dayCounts[shortDay] >= reqS) continue;
+
+        for (let overDay = 0; overDay < daysInMonth && !swapped; overDay++) {
+          const reqO = getDayStaffReq(overDay);
+          if (dayCounts[overDay] <= reqO) continue;
+          if (shortDay === overDay) continue;
+
+          const cands = activeNurses.filter(n => {
+            if (adj[n.id][overDay] !== '日' || adj[n.id][shortDay] !== '休') return false;
+            if (isLocked(n.id, overDay) || isLocked(n.id, shortDay)) return false;
+            if (nurseShiftPrefs[n.id]?.noDayShift) return false;
+            if (isSunday(shortDay) && n.position === '師長') return false;
+            let before = 0;
+            for (let d = shortDay - 1; d >= 0; d--) { if (isWorkShift(adj[n.id][d])) before++; else break; }
+            let after = 0;
+            for (let d = shortDay + 1; d < daysInMonth; d++) { if (isWorkShift(adj[n.id][d])) after++; else break; }
+            if (before + 1 + after > cfg.maxConsec) return false;
+            return true;
+          });
+          if (cands.length === 0) continue;
+
+          adj[cands[0].id][overDay] = '休';
+          adj[cands[0].id][shortDay] = '日';
+          dayCounts[overDay]--;
+          dayCounts[shortDay]++;
+          swapped = true;
+        }
+      }
+      if (!swapped) break;
+    }
+
+    // I-3. 最終微調整（まだ不足している日に対して日勤日数が少ない人を優先配置）
     for (let day = 0; day < daysInMonth; day++) {
       const dayReq = getDayStaffReq(day);
       let dc = 0;
       activeNurses.forEach(n => { if (adj[n.id][day] === '日') dc++; });
-
-      // 日勤不足 → 休みの人を日勤に変更
       while (dc < dayReq) {
         const cands = activeNurses.filter(n => {
           if (adj[n.id][day] !== '休') return false;
           if (isLocked(n.id, day)) return false;
           if (nurseShiftPrefs[n.id]?.noDayShift) return false;
           if (isSunday(day) && n.position === '師長') return false;
-          // 休日数が最低限を割らないか
           const off = adj[n.id].filter((s: any) => isOff(s)).length;
           if (off <= cfg.minDaysOff) return false;
-          // 連続勤務チェック
           let before = 0;
           for (let d = day - 1; d >= 0; d--) { if (isWorkShift(adj[n.id][d])) before++; else break; }
           let after = 0;
@@ -1724,13 +1822,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           if (before + 1 + after > cfg.maxConsec) return false;
           return true;
         }).sort((a, b) => {
-          const aNight = adj[a.id].filter((s: any) => isNightShift(s)).length;
-          const bNight = adj[b.id].filter((s: any) => isNightShift(s)).length;
-          // 夜勤3回未満の人を最優先
-          const aLowNight = aNight < 3 ? 0 : 1;
-          const bLowNight = bNight < 3 ? 0 : 1;
-          if (aLowNight !== bLowNight) return aLowNight - bLowNight;
-          // 同グループ内では休日が多い人を優先
+          const aDc = adj[a.id].filter((s: any) => s === '日').length;
+          const bDc = adj[b.id].filter((s: any) => s === '日').length;
+          if (aDc !== bDc) return aDc - bDc;
           const aOff = adj[a.id].filter((s: any) => isOff(s)).length;
           const bOff = adj[b.id].filter((s: any) => isOff(s)).length;
           return bOff - aOff;
@@ -1738,24 +1832,6 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
         if (cands.length === 0) break;
         adj[cands[0].id][day] = '日';
         dc++;
-      }
-
-      // 日勤過多（平日8人超え）→ 日勤の人を休みに変更
-      const maxDay = isWeekendOrHoliday(day) ? dayReq : 8;
-      while (dc > maxDay) {
-        const cands = activeNurses.filter(n => {
-          if (adj[n.id][day] !== '日') return false;
-          if (isLocked(n.id, day)) return false;
-          return true;
-        }).sort((a, b) => {
-          // 休日が少ない人を優先的に休みに変更
-          const aOff = adj[a.id].filter((s: any) => isOff(s)).length;
-          const bOff = adj[b.id].filter((s: any) => isOff(s)).length;
-          return aOff - bOff;
-        });
-        if (cands.length === 0) break;
-        adj[cands[0].id][day] = '休';
-        dc--;
       }
     }
 
@@ -3783,7 +3859,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                                           isWeekend ? generateConfig.weekendDayStaff :
                                           generateConfig.weekdayDayStaff;
                       return (
-                        <td key={i} className={`border text-center text-blue-700 ${isMaximized ? 'p-0 text-[10px]' : 'p-1'} ${count !== minRequired ? 'ring-2 ring-red-500 bg-red-50' : ''}`}>
+                        <td key={i} className={`border text-center text-blue-700 ${isMaximized ? 'p-0 text-[10px]' : 'p-1'} ${count !== minRequired ? 'outline outline-3 outline-red-500 -outline-offset-1 bg-red-50' : ''}`}>
                           <div>{count}</div>
                           <div className="text-[9px] text-gray-400">/{minRequired}</div>
                         </td>
