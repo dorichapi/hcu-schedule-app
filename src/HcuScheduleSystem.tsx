@@ -1815,8 +1815,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           improved = true;
         }
 
-        // 日勤過多 → 日勤の人を休みに変更
-        while (dc > dayReq) {
+        // 日勤過多 → 日勤の人を休みに変更（平日は8まで許容、土日祝は設定値厳守）
+        const maxAllowed = isWeekendOrHoliday(day) ? dayReq : Math.max(dayReq, 8);
+        while (dc > maxAllowed) {
           const cands = activeNurses.filter(n => {
             if (adj[n.id][day] !== '日') return false;
             if (isLocked(n.id, day)) return false;
@@ -1849,7 +1850,8 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
 
         for (let overDay = 0; overDay < daysInMonth && !swapped; overDay++) {
           const reqO = getDayStaffReq(overDay);
-          if (dayCounts[overDay] <= reqO) continue;
+          const maxO = isWeekendOrHoliday(overDay) ? reqO : Math.max(reqO, 8);
+          if (dayCounts[overDay] <= maxO) continue;
           if (shortDay === overDay) continue;
 
           const cands = activeNurses.filter(n => {
@@ -4151,7 +4153,15 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                           );
                         })()}
                         <td className={`border text-center bg-blue-50 font-bold text-blue-700 sticky z-[5] ${isMaximized ? 'p-0 text-[10px] right-[36px]' : 'p-1 right-[48px]'}`}>{stats.day}</td>
-                        <td className={`border text-center bg-gray-100 font-bold text-gray-600 sticky z-[5] ${isMaximized ? 'p-0 text-[10px] right-[18px]' : 'p-1 right-[24px]'}`}>{stats.off}</td>
+                        {(() => {
+                          const isExcluded = nurseShiftPrefs[nurse.id]?.excludeFromMaxDaysOff;
+                          const offDiffers = !isExcluded && stats.off !== generateConfig.maxDaysOff;
+                          return (
+                            <td className={`border text-center bg-gray-100 font-bold text-gray-600 sticky z-[5] ${isMaximized ? 'p-0 text-[10px] right-[18px]' : 'p-1 right-[24px]'} ${offDiffers ? 'outline outline-2 outline-red-500 -outline-offset-1' : ''}`}>
+                              {stats.off}{offDiffers && <span className="text-red-500 text-[9px]">({generateConfig.maxDaysOff})</span>}
+                            </td>
+                          );
+                        })()}
                         <td className={`border text-center bg-amber-50 font-bold text-amber-700 sticky right-0 z-[5] ${isMaximized ? 'p-0 text-[10px]' : 'p-1'}`}>{stats.work}</td>
                       </tr>
                     );
@@ -4230,10 +4240,16 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                                           isNewYear ? generateConfig.newYearDayStaff :
                                           isWeekend ? generateConfig.weekendDayStaff :
                                           generateConfig.weekdayDayStaff;
+                      const holidayListF = getJapaneseHolidays(targetYear, targetMonth);
+                      const isNatHolF = holidayListF.includes(day);
+                      const isStrictDay = isWeekend || isNatHolF || isYearEnd || isNewYear;
+                      const isDeviation = isStrictDay
+                        ? count !== minRequired
+                        : (count < minRequired || count > 8);
                       return (
-                        <td key={i} className={`border text-center text-blue-700 ${isMaximized ? 'p-0 text-[10px]' : 'p-1'} ${count !== minRequired ? 'outline outline-3 outline-red-500 -outline-offset-1 bg-red-50' : ''}`}>
+                        <td key={i} className={`border text-center text-blue-700 ${isMaximized ? 'p-0 text-[10px]' : 'p-1'} ${isDeviation ? 'outline outline-3 outline-red-500 -outline-offset-1 bg-red-50' : ''}`}>
                           <div>{count}</div>
-                          <div className="text-[9px] text-gray-400">/{minRequired}</div>
+                          <div className="text-[9px] text-gray-400">/{isStrictDay ? minRequired : `${minRequired}-8`}</div>
                         </td>
                       );
                     })}
