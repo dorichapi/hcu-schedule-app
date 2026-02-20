@@ -1420,7 +1420,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
         const nr = getNightReq(d);
         if (nc !== nr) s -= Math.abs(nc - nr) * 3000;
         if (isWeekendOrHoliday(d)) { if (dc !== getDayStaffReq(d)) s -= Math.abs(dc - getDayStaffReq(d)) * 500; }
-        else { if (dc < 6) s -= (6 - dc) * 500; else if (dc > 8) s -= (dc - 8) * 300; }
+        else { const dr = getDayStaffReq(d); if (dc < dr) s -= (dr - dc) * 500; else if (dc > dr + 2) s -= (dc - dr - 2) * 300; }
       }
       return s;
     };
@@ -1459,7 +1459,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       for (let d = 0; d < daysInMonth; d++) {
         let dc = 0; activeNurses.forEach(n => { if (sc[n.id][d] === '日') dc++; });
         if (isWeekendOrHoliday(d)) { if (dc !== getDayStaffReq(d)) penalty += Math.abs(dc - getDayStaffReq(d)) * 100; }
-        else { if (dc < 6) penalty += (6 - dc) * 100; if (dc > 8) penalty += (dc - 8) * 100; }
+        else { const dr = getDayStaffReq(d); if (dc < dr) penalty += (dr - dc) * 100; if (dc > dr + 2) penalty += (dc - dr - 2) * 100; }
       }
       // 連続勤務制約
       activeNurses.forEach(n => {
@@ -1816,7 +1816,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
         }
 
         // 日勤過多 → 日勤の人を休みに変更（平日は8まで許容、土日祝は設定値厳守）
-        const maxAllowed = isWeekendOrHoliday(day) ? dayReq : Math.max(dayReq, 8);
+        const maxAllowed = isWeekendOrHoliday(day) ? dayReq : dayReq + 2;
         while (dc > maxAllowed) {
           const cands = activeNurses.filter(n => {
             if (adj[n.id][day] !== '日') return false;
@@ -1850,7 +1850,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
 
         for (let overDay = 0; overDay < daysInMonth && !swapped; overDay++) {
           const reqO = getDayStaffReq(overDay);
-          const maxO = isWeekendOrHoliday(overDay) ? reqO : Math.max(reqO, 8);
+          const maxO = isWeekendOrHoliday(overDay) ? reqO : reqO + 2;
           if (dayCounts[overDay] <= maxO) continue;
           if (shortDay === overDay) continue;
 
@@ -2016,7 +2016,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       if (isWeekendOrHoliday(d)) {
         if (dc !== getDayStaffReq(d)) { dayOk = false; report.push(`⚠️ ${d+1}日(休日): 日勤${dc}人（要件${getDayStaffReq(d)}人）`); }
       } else {
-        if (dc < 6 || dc > 8) { dayOk = false; report.push(`⚠️ ${d+1}日(平日): 日勤${dc}人（許容6-8人）`); }
+        const drReq = getDayStaffReq(d); if (dc < drReq || dc > drReq + 2) { dayOk = false; report.push(`⚠️ ${d+1}日(平日): 日勤${dc}人（許容${drReq}-${drReq + 2}人）`); }
       }
     }
     if (dayOk) report.push('✅ 日勤人数: 全日OK');
@@ -4245,11 +4245,11 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                       const isStrictDay = isWeekend || isNatHolF || isYearEnd || isNewYear;
                       const isDeviation = isStrictDay
                         ? count !== minRequired
-                        : (count < minRequired || count > 8);
+                        : (count < minRequired || count > minRequired + 2);
                       return (
                         <td key={i} className={`border text-center text-blue-700 ${isMaximized ? 'p-0 text-[10px]' : 'p-1'} ${isDeviation ? 'outline outline-3 outline-red-500 -outline-offset-1 bg-red-50' : ''}`}>
                           <div>{count}</div>
-                          <div className="text-[9px] text-gray-400">/{isStrictDay ? minRequired : `${minRequired}-8`}</div>
+                          <div className="text-[9px] text-gray-400">/{isStrictDay ? minRequired : `${minRequired}-${minRequired + 2}`}</div>
                         </td>
                       );
                     })}
