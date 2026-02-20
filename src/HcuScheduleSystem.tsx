@@ -138,6 +138,62 @@ const getDayOfWeek = (year, month, day) => {
   return ['日', '月', '火', '水', '木', '金', '土'][d.getDay()];
 };
 
+// 日本の祝日を取得（年と月を指定、1-based dayの配列を返す）
+const getJapaneseHolidays = (year: number, month: number): number[] => {
+  // month は 0-based (0=1月, 11=12月)
+  const holidays: number[] = [];
+  const m = month + 1;
+
+  if (m === 1) { holidays.push(1); holidays.push(11); }
+  if (m === 2) holidays.push(23);
+  if (m === 3) holidays.push(21);
+  if (m === 4) holidays.push(29);
+  if (m === 5) { holidays.push(3); holidays.push(4); holidays.push(5); }
+  if (m === 7) holidays.push(20);
+  if (m === 8) holidays.push(11);
+  if (m === 9) { holidays.push(16); holidays.push(23); }
+  if (m === 10) holidays.push(14);
+  if (m === 11) { holidays.push(3); holidays.push(23); }
+
+  const getNthMonday = (y: number, mo: number, n: number): number => {
+    let count = 0;
+    for (let d = 1; d <= 31; d++) {
+      const date = new Date(y, mo, d);
+      if (date.getMonth() !== mo) break;
+      if (date.getDay() === 1) { count++; if (count === n) return d; }
+    }
+    return 1;
+  };
+
+  if (m === 1) { const idx = holidays.indexOf(11); if (idx >= 0) holidays[idx] = getNthMonday(year, 0, 2); }
+  if (m === 7) { const idx = holidays.indexOf(20); if (idx >= 0) holidays[idx] = getNthMonday(year, 6, 3); }
+  if (m === 9) { const idx = holidays.indexOf(16); if (idx >= 0) holidays[idx] = getNthMonday(year, 8, 3); }
+  if (m === 10) { const idx = holidays.indexOf(14); if (idx >= 0) holidays[idx] = getNthMonday(year, 9, 2); }
+
+  if (m === 3) {
+    const idx = holidays.indexOf(21);
+    const spring = Math.floor(20.8431 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+    if (idx >= 0) holidays[idx] = spring;
+  }
+  if (m === 9) {
+    const idx = holidays.indexOf(23);
+    const autumn = Math.floor(23.2488 + 0.242194 * (year - 1980) - Math.floor((year - 1980) / 4));
+    if (idx >= 0) holidays[idx] = autumn;
+  }
+
+  const extraHolidays: number[] = [];
+  holidays.forEach(d => {
+    const date = new Date(year, month, d);
+    if (date.getDay() === 0) {
+      const next = d + 1;
+      const daysInM = new Date(year, month + 1, 0).getDate();
+      if (next <= daysInM && !holidays.includes(next)) extraHolidays.push(next);
+    }
+  });
+
+  return [...holidays, ...extraHolidays].filter(d => d >= 1 && d <= new Date(year, month + 1, 0).getDate());
+};
+
 const isWeekend = (year, month, day) => {
   const d = new Date(year, month, day);
   return d.getDay() === 0 || d.getDay() === 6;
@@ -1046,7 +1102,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
     await tick();
 
     const monthKey = `${targetYear}-${targetMonth}`;
-    const holidays: number[] = [];
+    const holidays: number[] = getJapaneseHolidays(targetYear, targetMonth);
 
     // ============ ヘルパー関数 ============
     const isWeekendOrHoliday = (day: number) => {
@@ -1278,6 +1334,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
         if (ddc[d] >= req) continue;
         activeNurses.filter(n => !sc[n.id][d] && !nurseShiftPrefs[n.id]?.noDayShift && !(isSunday(d) && n.position === '師長') && consecBefore(sc, n.id, d) < cfg.maxConsec)
           .sort((a, b) => {
+            const posOrd = (n: any) => ['師長', '主任', '副主任'].includes(n.position) ? 0 : 1;
+            const aPo = posOrd(a); const bPo = posOrd(b);
+            if (aPo !== bPo) return aPo - bPo;
             const aLow = st[a.id].nightCount < 3 ? 0 : 1;
             const bLow = st[b.id].nightCount < 3 ? 0 : 1;
             if (aLow !== bLow) return aLow - bLow;
@@ -1289,6 +1348,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       // 残りの空き（夜勤が少ない人を先に日勤配置）
       const twk = daysInMonth - cfg.minDaysOff;
       const sortedForFill = [...activeNurses].sort((a, b) => {
+        const posOrd = (n: any) => ['師長', '主任', '副主任'].includes(n.position) ? 0 : 1;
+        const aPo = posOrd(a); const bPo = posOrd(b);
+        if (aPo !== bPo) return aPo - bPo;
         const aLow = st[a.id].nightCount < 3 ? 0 : 1;
         const bLow = st[b.id].nightCount < 3 ? 0 : 1;
         if (aLow !== bLow) return aLow - bLow;
@@ -1311,6 +1373,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           while (ddc[d] < req) {
             const c = activeNurses.filter(n => sc[n.id][d] === '休' && !nurseShiftPrefs[n.id]?.noDayShift && !isLocked(n.id, d) && consecAround(sc, n.id, d) <= cfg.maxConsec && st[n.id].daysOff > cfg.minDaysOff)
               .sort((a, b) => {
+                const posOrd = (n: any) => ['師長', '主任', '副主任'].includes(n.position) ? 0 : 1;
+                const aPo = posOrd(a); const bPo = posOrd(b);
+                if (aPo !== bPo) return aPo - bPo;
                 const aLow = st[a.id].nightCount < 3 ? 0 : 1;
                 const bLow = st[b.id].nightCount < 3 ? 0 : 1;
                 if (aLow !== bLow) return aLow - bLow;
@@ -1726,6 +1791,10 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
             if (before + 1 + after > cfg.maxConsec) return false;
             return true;
           }).sort((a, b) => {
+            // 役職者（師長・主任・副主任）を最優先
+            const posOrder = (n: any) => ['師長', '主任', '副主任'].includes(n.position) ? 0 : 1;
+            const aPo = posOrder(a); const bPo = posOrder(b);
+            if (aPo !== bPo) return aPo - bPo;
             const aNight = adj[a.id].filter((s: any) => isNightShift(s)).length;
             const bNight = adj[b.id].filter((s: any) => isNightShift(s)).length;
             const aLow = aNight < 3 ? 0 : 1;
@@ -1822,6 +1891,10 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           if (before + 1 + after > cfg.maxConsec) return false;
           return true;
         }).sort((a, b) => {
+          // 役職者を最優先
+          const posOrder = (n: any) => ['師長', '主任', '副主任'].includes(n.position) ? 0 : 1;
+          const aPo = posOrder(a); const bPo = posOrder(b);
+          if (aPo !== bPo) return aPo - bPo;
           const aDc = adj[a.id].filter((s: any) => s === '日').length;
           const bDc = adj[b.id].filter((s: any) => s === '日').length;
           if (aDc !== bDc) return aDc - bDc;
@@ -3762,16 +3835,18 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                     {Array.from({ length: daysInMonth }, (_, i) => {
                       const day = i + 1;
                       const dow = getDayOfWeek(targetYear, targetMonth, day);
-                      const isHoliday = dow === '日' || dow === '土';
+                      const holidayList = getJapaneseHolidays(targetYear, targetMonth);
+                      const isNationalHoliday = holidayList.includes(day);
+                      const isHoliday = dow === '日' || dow === '土' || isNationalHoliday;
                       return (
                         <th
                           key={day}
                           className={`border ${isMaximized ? 'px-0 py-0 min-w-[20px]' : 'p-1 min-w-[32px]'} ${isHoliday ? 'bg-red-50' : 'bg-gray-100'}`}
                         >
-                          <div className={`${isMaximized ? 'text-[9px] leading-none' : 'text-xs'} ${dow === '日' ? 'text-red-500' : dow === '土' ? 'text-blue-500' : ''}`}>
+                          <div className={`${isMaximized ? 'text-[9px] leading-none' : 'text-xs'} ${dow === '日' || isNationalHoliday ? 'text-red-500' : dow === '土' ? 'text-blue-500' : ''}`}>
                             {dow}
                           </div>
-                          <div className={isMaximized ? 'text-[10px] leading-none' : ''}>{day}</div>
+                          <div className={`${isMaximized ? 'text-[10px] leading-none' : ''} ${dow === '日' || isNationalHoliday ? 'text-red-500' : dow === '土' ? 'text-blue-500' : ''}`}>{day}</div>
                         </th>
                       );
                     })}
@@ -4496,10 +4571,11 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                       {Array.from({ length: daysInMonth }, (_, i) => {
                         const day = i + 1;
                         const dow = getDayOfWeek(targetYear, targetMonth, day);
+                        const isNatHoliday = getJapaneseHolidays(targetYear, targetMonth).includes(day);
                         return (
-                          <th key={day} className={`border p-1 min-w-[32px] ${dow === '土' ? 'bg-blue-50' : dow === '日' ? 'bg-red-50' : 'bg-gray-100'}`}>
-                            <div className={`text-xs ${dow === '日' ? 'text-red-500' : dow === '土' ? 'text-blue-500' : ''}`}>{dow}</div>
-                            <div>{day}</div>
+                          <th key={day} className={`border p-1 min-w-[32px] ${dow === '日' || isNatHoliday ? 'bg-red-50' : dow === '土' ? 'bg-blue-50' : 'bg-gray-100'}`}>
+                            <div className={`text-xs ${dow === '日' || isNatHoliday ? 'text-red-500' : dow === '土' ? 'text-blue-500' : ''}`}>{dow}</div>
+                            <div className={dow === '日' || isNatHoliday ? 'text-red-500' : dow === '土' ? 'text-blue-500' : ''}>{day}</div>
                           </th>
                         );
                       })}
