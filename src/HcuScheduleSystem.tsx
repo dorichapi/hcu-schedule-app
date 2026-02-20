@@ -1835,6 +1835,73 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       }
     }
 
+    // J. 夜勤人数の絶対最終保証（全フェーズ終了後の最終チェック）
+    for (let day = 0; day < daysInMonth; day++) {
+      const nReq = getNightReq(day);
+      let nc = 0;
+      activeNurses.forEach(n => { if (isNightShift(adj[n.id][day])) nc++; });
+
+      // 夜勤不足
+      while (nc < nReq) {
+        // 第1候補: 通常条件
+        let cands = activeNurses.filter(n => {
+          if (isNightShift(adj[n.id][day]) || isAkeShift(adj[n.id][day])) return false;
+          if (isLocked(n.id, day)) return false;
+          if (day > 0 && isNightShift(adj[n.id][day - 1])) return false;
+          if (day + 1 < daysInMonth && isNightShift(adj[n.id][day + 1])) return false;
+          if (day + 1 < daysInMonth && isLocked(n.id, day + 1) && exReqs[n.id]?.[day + 1] && exReqs[n.id][day + 1] !== '明') return false;
+          const pr = nurseShiftPrefs[n.id];
+          if (pr?.noNightShift) return false;
+          const mx = pr?.maxNightShifts ?? cfg.maxNightShifts;
+          if (adj[n.id].filter((s: any) => isNightShift(s)).length >= mx) return false;
+          return true;
+        }).sort((a, b) => adj[a.id].filter((s: any) => isNightShift(s)).length - adj[b.id].filter((s: any) => isNightShift(s)).length);
+
+        // 第1候補が見つからない場合、緩和条件で再検索（夜勤上限を+1まで許容）
+        if (cands.length === 0) {
+          cands = activeNurses.filter(n => {
+            if (isNightShift(adj[n.id][day]) || isAkeShift(adj[n.id][day])) return false;
+            if (isLocked(n.id, day)) return false;
+            if (day > 0 && isNightShift(adj[n.id][day - 1])) return false;
+            if (day + 1 < daysInMonth && isNightShift(adj[n.id][day + 1])) return false;
+            if (day + 1 < daysInMonth && isLocked(n.id, day + 1) && exReqs[n.id]?.[day + 1] && exReqs[n.id][day + 1] !== '明') return false;
+            const pr = nurseShiftPrefs[n.id];
+            if (pr?.noNightShift) return false;
+            const mx = (pr?.maxNightShifts ?? cfg.maxNightShifts) + 1;
+            if (adj[n.id].filter((s: any) => isNightShift(s)).length >= mx) return false;
+            return true;
+          }).sort((a, b) => adj[a.id].filter((s: any) => isNightShift(s)).length - adj[b.id].filter((s: any) => isNightShift(s)).length);
+        }
+
+        if (cands.length === 0) break;
+        const pk = cands[0];
+        adj[pk.id][day] = '夜';
+        if (day + 1 < daysInMonth && !isLocked(pk.id, day + 1)) adj[pk.id][day + 1] = '明';
+        if (day + 2 < daysInMonth && !isNightShift(adj[pk.id][day + 2]) && !isLocked(pk.id, day + 2)) adj[pk.id][day + 2] = '休';
+        nc++;
+      }
+
+      // 夜勤過多
+      while (nc > nReq) {
+        const nns = activeNurses.filter(n => adj[n.id][day] === '夜' && !isLocked(n.id, day));
+        if (nns.length === 0) break;
+        nns.sort((a, b) => adj[b.id].filter((s: any) => isNightShift(s)).length - adj[a.id].filter((s: any) => isNightShift(s)).length);
+        adj[nns[0].id][day] = '日';
+        if (day + 1 < daysInMonth && adj[nns[0].id][day + 1] === '明' && !isLocked(nns[0].id, day + 1)) adj[nns[0].id][day + 1] = '日';
+        nc--;
+      }
+    }
+
+    // 最終夜→明・孤立明整合性
+    activeNurses.forEach(n => {
+      for (let d = 0; d < daysInMonth; d++) {
+        if (adj[n.id][d] === '夜' && d + 1 < daysInMonth && adj[n.id][d + 1] !== '明' && !isLocked(n.id, d + 1)) adj[n.id][d + 1] = '明';
+        if (adj[n.id][d] === '管夜' && d + 1 < daysInMonth && adj[n.id][d + 1] !== '管明' && !isLocked(n.id, d + 1)) adj[n.id][d + 1] = '管明';
+        if (adj[n.id][d] === '明' && (d === 0 || adj[n.id][d - 1] !== '夜') && !isLocked(n.id, d)) adj[n.id][d] = '休';
+        if (adj[n.id][d] === '管明' && (d === 0 || adj[n.id][d - 1] !== '管夜') && !isLocked(n.id, d)) adj[n.id][d] = '休';
+      }
+    });
+
     // ============ 最終スケジュール & 検証レポート ============
     const final: Record<string, any> = {};
     activeNurses.forEach(n => { final[n.id] = adj[n.id]; });
