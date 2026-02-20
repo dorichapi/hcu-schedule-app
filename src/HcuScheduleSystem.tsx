@@ -3517,8 +3517,8 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
                     const stats = {
                       night: shifts.filter(s => s === '夜' || s === '管夜').length,
                       day: shifts.filter(s => s === '日').length,
-                      off: shifts.filter(s => s === '休' || s === '有' || s === '明' || s === '管明').length,
-                      work: shifts.filter(s => s && s !== '休' && s !== '有' && s !== '明' && s !== '管明').length
+                      off: shifts.filter(s => s === '休' || s === '有').length,
+                      work: shifts.filter(s => s && s !== '休' && s !== '有').length
                     };
                     
                     return (
