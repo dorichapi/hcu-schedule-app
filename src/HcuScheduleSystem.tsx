@@ -4037,7 +4037,7 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
             {!isMaximized && (
             <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 mb-4">
               <p className="text-sm text-blue-800">
-                <strong>💡 手動編集：</strong>セルをクリックすると「日」→「夜」→「休」→「有」→「空」と切り替わります。「夜」選択時は翌日が自動で「明」、翌々日が自動で「休」になります。
+                <strong>💡 手動編集：</strong>セルをクリックすると「日」→「夜」→「管夜」→「休」→「有」→「午前半」→「午後半」→「空」と切り替わります。「夜」選択時は翌日が自動で「明」、翌々日が「休」に、「管夜」選択時は翌日が「管明」、翌々日が「休」になります。「明」「管明」をクリックすると「休」に変わります。
               </p>
             </div>
             )}
