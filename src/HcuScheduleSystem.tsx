@@ -1277,13 +1277,24 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
         const req = getDayStaffReq(d);
         if (ddc[d] >= req) continue;
         activeNurses.filter(n => !sc[n.id][d] && !nurseShiftPrefs[n.id]?.noDayShift && !(isSunday(d) && n.position === '師長') && consecBefore(sc, n.id, d) < cfg.maxConsec)
-          .sort((a, b) => st[a.id].totalWork - st[b.id].totalWork)
+          .sort((a, b) => {
+            const aLow = st[a.id].nightCount < 3 ? 0 : 1;
+            const bLow = st[b.id].nightCount < 3 ? 0 : 1;
+            if (aLow !== bLow) return aLow - bLow;
+            return st[a.id].totalWork - st[b.id].totalWork;
+          })
           .slice(0, req - ddc[d]).forEach(n => { sc[n.id][d] = '日'; st[n.id].totalWork++; st[n.id].dayWorkCount++; ddc[d]++; });
       }
 
-      // 残りの空き
+      // 残りの空き（夜勤が少ない人を先に日勤配置）
       const twk = daysInMonth - cfg.minDaysOff;
-      activeNurses.forEach(n => {
+      const sortedForFill = [...activeNurses].sort((a, b) => {
+        const aLow = st[a.id].nightCount < 3 ? 0 : 1;
+        const bLow = st[b.id].nightCount < 3 ? 0 : 1;
+        if (aLow !== bLow) return aLow - bLow;
+        return st[a.id].totalWork - st[b.id].totalWork;
+      });
+      sortedForFill.forEach(n => {
         for (let d = 0; d < daysInMonth; d++) {
           if (sc[n.id][d]) continue;
           if (consecBefore(sc, n.id, d) >= cfg.maxConsec) { sc[n.id][d] = '休'; st[n.id].daysOff++; }
@@ -1299,7 +1310,12 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           const req = getDayStaffReq(d);
           while (ddc[d] < req) {
             const c = activeNurses.filter(n => sc[n.id][d] === '休' && !nurseShiftPrefs[n.id]?.noDayShift && !isLocked(n.id, d) && consecAround(sc, n.id, d) <= cfg.maxConsec && st[n.id].daysOff > cfg.minDaysOff)
-              .sort((a, b) => st[a.id].totalWork - st[b.id].totalWork);
+              .sort((a, b) => {
+                const aLow = st[a.id].nightCount < 3 ? 0 : 1;
+                const bLow = st[b.id].nightCount < 3 ? 0 : 1;
+                if (aLow !== bLow) return aLow - bLow;
+                return st[a.id].totalWork - st[b.id].totalWork;
+              });
             if (c.length === 0) break;
             sc[c[0].id][d] = '日'; st[c[0].id].totalWork++; st[c[0].id].dayWorkCount++; st[c[0].id].daysOff--; ddc[d]++;
           }
@@ -1708,7 +1724,13 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           if (before + 1 + after > cfg.maxConsec) return false;
           return true;
         }).sort((a, b) => {
-          // 休日が多い人を優先的に日勤に変更
+          const aNight = adj[a.id].filter((s: any) => isNightShift(s)).length;
+          const bNight = adj[b.id].filter((s: any) => isNightShift(s)).length;
+          // 夜勤3回未満の人を最優先
+          const aLowNight = aNight < 3 ? 0 : 1;
+          const bLowNight = bNight < 3 ? 0 : 1;
+          if (aLowNight !== bLowNight) return aLowNight - bLowNight;
+          // 同グループ内では休日が多い人を優先
           const aOff = adj[a.id].filter((s: any) => isOff(s)).length;
           const bOff = adj[b.id].filter((s: any) => isOff(s)).length;
           return bOff - aOff;
