@@ -334,6 +334,9 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
   const [nurseShiftPrefs, setNurseShiftPrefs] = useState<Record<number, { maxNightShifts: number; noNightShift: boolean; noDayShift: boolean; excludeFromMaxDaysOff: boolean; maxRequests: number; excludeFromGeneration: boolean }>>({});
   const [showNurseShiftPrefs, setShowNurseShiftPrefs] = useState(false);
 
+  // 設定読み込み完了フラグ
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+
   // 夜勤NG組み合わせ
   const [nightNgPairs, setNightNgPairs] = useState<[number, number][]>([]);
   const [showNightNgPairs, setShowNightNgPairs] = useState(false);
@@ -454,6 +457,24 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
           } catch(e) { console.error('夜勤NGペア解析エラー:', e); }
         }
 
+        // 生成設定の読み込み
+        const savedGenConfig = await fetchSettingFromDB('generateConfig');
+        if (savedGenConfig) {
+          try {
+            const parsed = JSON.parse(savedGenConfig);
+            setGenerateConfig(prev => ({ ...prev, ...parsed }));
+          } catch(e) { console.error('generateConfig解析エラー:', e); }
+        }
+
+        // 締め切り設定の読み込み
+        const savedDeadline = await fetchSettingFromDB('requestDeadline');
+        if (savedDeadline) {
+          try {
+            const parsed = JSON.parse(savedDeadline);
+            setRequestDeadline(prev => ({ ...prev, ...parsed }));
+          } catch(e) { console.error('requestDeadline解析エラー:', e); }
+        }
+
         // 管理者パスワードの読み込み
         const savedPw = await fetchSettingFromDB('adminPassword');
         if (savedPw) {
@@ -462,11 +483,30 @@ const HcuScheduleSystem = ({ department = 'HCU', onBack }: { department?: 'HCU' 
       } catch (error: any) {
         console.error('データ読み込みエラー:', error);
       } finally {
+        setSettingsLoaded(true);
         setIsLoading(false);
       }
     };
     loadData();
   }, [targetYear, targetMonth]);
+
+  // generateConfigの変更をDBに保存
+  useEffect(() => {
+    if (!settingsLoaded || !isAdminAuth) return;
+    const timer = setTimeout(() => {
+      saveSettingToDB('generateConfig', JSON.stringify(generateConfig));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [generateConfig, settingsLoaded, isAdminAuth]);
+
+  // requestDeadlineの変更をDBに保存
+  useEffect(() => {
+    if (!settingsLoaded || !isAdminAuth) return;
+    const timer = setTimeout(() => {
+      saveSettingToDB('requestDeadline', JSON.stringify(requestDeadline));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [requestDeadline, settingsLoaded, isAdminAuth]);
 
   // ページ離脱時の確認ダイアログ
   useEffect(() => {
